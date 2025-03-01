@@ -1,0 +1,192 @@
+---
+title: "CIS Project data-prep"
+output: html_notebook
+---
+
+Create daatsets for Sherya based on the US maket. Thsi work was done on the 14 November 2021.
+
+Focus on attrition at the OS level.
+
+* Attrition data from 2019-2021.
+* Active workforce at the end of every year - 2019-2021.
+* Dataset with active and attrition for 2019-2021 with age profile, work experience etc - limited to OS.
+
+The data for 2021 is until 30 Sep.
+
+# Load the libraries:
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(readxl)
+library(ggthemes)
+library(tidytext)
+library(ggridges)
+theme_set(theme_economist_white())
+```
+
+# Load thee data:
+
+```{r}
+# promos
+promo_2019 <- read_excel("data/Promotions_2019.xlsx") %>% clean_names()
+promo_2020 <- read_excel("data/Promotions_2020.xlsx") %>% clean_names()
+promo_2021 <- read_excel("data/Promotions_2021.xlsx") %>% clean_names()
+
+promo_2020 <- promo_2020 %>% rename(gender = grade_2) #fix var name
+
+promo_2019_2021 <- bind_rows(promo_2019, promo_2020, promo_2021) # joind all promos
+
+# actives
+active_2021 <- read_excel("data/WF Sep 2021_copy_pasted.xlsx", 
+    sheet = "Workforce Sept") %>% clean_names()
+
+active_2020 <- read_excel("data/WF report 2020-2021_03062021.xlsx", 
+    sheet = "WF 2020") %>% clean_names()
+
+active_2019 <- read_excel("data/WF report 2017-2019_03062021.xlsx", 
+    sheet = "WF 2019") %>% clean_names()
+
+# attritio
+
+```
+
+# Trim the dataset to just US [change ths to Finance]
+
+```{r}
+
+promo_amr_OS <- promo_2019_2021 %>% filter(region == "AMR",
+                                            grade == "OS")
+
+promo_amr_OS <- promo_amr_OS %>% 
+  mutate(adjustment_date = parse_date_time(adjustment_date, orders = c("ymd")),
+         year = year(adjustment_date))
+
+attrition_amr_os <- attrition_2017_2021 %>% filter(region_code == "AMR",
+                                                   leave_date > dmy("31-12-2018"),
+                                                   cor_grade == "OS")
+
+active_2019_amr_os <- active_2019 %>% filter(region_code == "AMR",
+                                            cor_grade == "OS") %>% 
+  mutate(data_year = 2019) # add to distinguish aactive data for each year
+  
+active_2020_amr_os <- active_2020 %>% filter(region_code == "AMR",
+                                            cor_grade == "OS")%>% 
+  mutate(data_year = 2020) # add to distinguish aactive data for each year
+
+active_2021_amr_os <- active_2021 %>% filter(region_code == "AMR",
+                                            cor_grade == "OS") %>% 
+  mutate(data_year = 2021) # add to distinguish aactive data for each year
+  
+```
+
+# Tables for Shreya
+* 2019-2021, actives, attrition, promotions for OS tabulated form
+* Combine the actives, promotios, attrition data for 2019-2021 for OS in raw form
+
+
+```{r}
+# Raw form data.
+# select relevant cols
+
+# actives:
+active_data_combined <- bind_rows(
+  active_2019_amr_os %>% 
+    select(empl_no, employee_name, position_title, job_family, hire_date, serv_yrs, country, gender, birth_date, nationality, cor_grade, data_year),
+
+  active_2020_amr_os %>% 
+    select(empl_no, employee_name, position_title, job_family, hire_date, serv_yrs, country, gender, birth_date, nationality, cor_grade, data_year),
+
+  active_2021_amr_os %>% 
+    select(empl_no, employee_name, position_title, job_family, hire_date, serv_yrs, country, gender, birth_date, nationality, cor_grade, data_year)) %>% 
+  mutate(empl_status = "Active",
+         birth_date = parse_date_time(birth_date, orders = c("dmy"))) 
+  
+write_csv(active_data_combined, "processed/active_os_amr_2019-2021.csv")
+
+# promos
+promotions_os_amr_2019_2021 <- promo_amr_OS %>%
+  select(!c(company, tybe_of_emp, level_3:position)) %>%
+  rename(promotion_date = adjustment_date)
+  
+write_csv(promotions_os_amr_2019_2021, "processed/promotions_os_amr_2019-2021.csv")
+
+# attition
+attrition_raw_fine <- attrition_amr_os %>%
+  mutate(text_4= "Inactive" ) %>% select(-gender) %>% rename(gender= gender_tex) %>%
+  select(empl_no,employee_name, text_4, position_title, job_family, hire_date, 
+         serv_yrs, cor_grade, leave_date, reason_text, reason_type) %>% 
+  mutate(hire_date = parse_date_time(hire_date, orders= "dmy"),
+         service_years = round(interval(hire_date, leave_date)/years(1),1)) %>% 
+  mutate(change = case_when(
+    service_years < 0 ~ "yes",
+    service_years >=0 ~ "no",
+                TRUE ~ NA_character_
+  )) %>% filter(change== "no")
+
+attrition_raw_fix <- attrition_amr_os %>%
+  mutate(text_4= "Inactive" ) %>% select(-gender) %>% rename(gender= gender_tex) %>%
+  select(empl_no,employee_name, text_4, position_title, job_family, hire_date, 
+         serv_yrs, cor_grade, leave_date, reason_text, reason_type) %>% 
+  mutate(hire_date = parse_date_time(hire_date, orders= "dmy"),
+         service_years = round(interval(hire_date, leave_date)/years(1),1)) %>% 
+  mutate(change = case_when(
+    service_years <0 ~ "yes",
+    service_years >=0 ~ "no",
+                TRUE ~ NA_character_
+  )) %>% filter(change == "yes" | is.na(change)) # need to include NA_character [continue here]
+
+attrition_raw_fixed <- attrition_raw_fix %>%
+  rename(hire_date = leave_date,
+         leave_date = hire_date) %>% 
+ mutate(service_years = round(interval(hire_date, leave_date)/years(1),1)) 
+
+attrition_os_amr_2019_2021 <- bind_rows(
+  attrition_raw_fine %>% select(-change),
+  attrition_raw_fixed %>% select(-change)) %>%
+  
+  rename(status= text_4) %>%
+  relocate(leave_date, .after=cor_grade) %>%
+  relocate(service_years, .before=reason_text) %>%
+  relocate(reason_type,.before=reason_text) %>%
+  
+  select(-serv_yrs) %>% filter(reason_text != "System Transfer") 
+
+
+write_csv(attrition_os_amr_2019_2021, "processed/attrition_os_amr_2019-2021.csv")
+
+# Tabular form data.
+
+tbl <- left_join(active_data_combined %>% count(data_year, name= "active") ,
+          attrition_os_amr_2019_2021 %>% count(year(leave_date), name= "attrition") %>% rename(data_year = 'year(leave_date)'))
+
+tbl_all <- left_join(tbl,
+                     promotions_os_amr_2019_2021 %>% count(year, name= "promotions") %>% rename(data_year = year)) %>%
+  mutate(remarks = c("full_year", "full_year", "1 Jan to 30 September"))
+
+write_csv(tbl_all, "processed/Tabular_data_OS_AMR_2019-2021.csv")
+
+```
+
+# Data Exploration
+
+```{r}
+
+# has the ae profile changed oiver time
+
+active_data_combined %>% 
+  mutate(data_year = as_factor(data_year)) %>%
+  ggplot(aes(serv_yrs, data_year))+
+geom_density_ridges(
+    jittered_points = TRUE, quantile_lines = TRUE, scale = 0.7, alpha = 0.7,
+    vline_size = 2, vline_color = "red",
+    point_size = 0.4, point_alpha = 1,
+    position = position_raincloud(adjust_vlines = TRUE)
+  )+
+  scale_x_continuous(name= "\nService years", breaks = seq(0,60,2))+
+  scale_y_discrete(name="")+
+  labs(title = "Distribution of service years is the narrowest in 2021",
+       subtitle = "\nThe bottom quartile experience is at 3 years because we have not been able to hire new workers!\nAnd the top quartile experience is at 27 years because we have lost experienced workforce.\nIts a double whammy we are losing experienced workforce and and are unable to hire new workers.")
+
+```
